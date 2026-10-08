@@ -41,7 +41,30 @@ class ManifestComponent(BaseModel):
     name: str
     exported: bool | None = None
     enabled: bool | None = None
-    permission: str | None = None
+    permission: str | None = Field(
+        default=None,
+        description="android:permission declared on this component; null does not mean the component is unprotected.",
+    )
+    effective_permission: str | None = Field(
+        default=None,
+        description="Component permission after inheriting android:permission from the application.",
+    )
+    read_permission: str | None = Field(
+        default=None,
+        description="Provider-specific android:readPermission; null for other component types or when not declared.",
+    )
+    write_permission: str | None = Field(
+        default=None,
+        description="Provider-specific android:writePermission; null for other component types or when not declared.",
+    )
+    effective_read_permission: str | None = Field(
+        default=None,
+        description="Effective provider read permission after component and application fallback.",
+    )
+    effective_write_permission: str | None = Field(
+        default=None,
+        description="Effective provider write permission after component and application fallback.",
+    )
     intent_actions: list[str] = Field(default_factory=list)
 
 
@@ -52,6 +75,10 @@ class ManifestResult(BaseModel):
     min_sdk: str | None = None
     target_sdk: str | None = None
     application_name: str | None = None
+    application_permission: str | None = Field(
+        default=None,
+        description="Default android:permission inherited by components that do not declare their own permission.",
+    )
     debuggable: bool | None = None
     permissions: list[str] = Field(default_factory=list)
     components: list[ManifestComponent] = Field(default_factory=list)

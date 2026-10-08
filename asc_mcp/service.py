@@ -295,6 +295,7 @@ class AndroidAnalysisService:
         root = ElementTree.fromstring(xml)
         uses_sdk = root.find("uses-sdk")
         application = root.find("application")
+        application_permission = _manifest_value(application, "permission") if application is not None else None
         components = []
         if application is not None:
             for kind in COMPONENT_KINDS:
@@ -307,13 +308,30 @@ class AndroidAnalysisService:
                         action_name = _manifest_value(action, "name")
                         if action_name:
                             actions.append(action_name)
+                    permission = _manifest_value(element, "permission")
+                    effective_permission = permission if permission is not None else application_permission
+                    read_permission = _manifest_value(element, "readPermission") if kind == "provider" else None
+                    write_permission = _manifest_value(element, "writePermission") if kind == "provider" else None
                     components.append(
                         {
                             "kind": kind,
                             "name": name,
                             "exported": _bool_value(_manifest_value(element, "exported")),
                             "enabled": _bool_value(_manifest_value(element, "enabled")),
-                            "permission": _manifest_value(element, "permission"),
+                            "permission": permission,
+                            "effective_permission": effective_permission,
+                            "read_permission": read_permission,
+                            "write_permission": write_permission,
+                            "effective_read_permission": (
+                                read_permission if read_permission is not None else effective_permission
+                            )
+                            if kind == "provider"
+                            else None,
+                            "effective_write_permission": (
+                                write_permission if write_permission is not None else effective_permission
+                            )
+                            if kind == "provider"
+                            else None,
                             "intent_actions": actions,
                         }
                     )
@@ -329,6 +347,7 @@ class AndroidAnalysisService:
             "min_sdk": _manifest_value(uses_sdk, "minSdkVersion") if uses_sdk is not None else None,
             "target_sdk": _manifest_value(uses_sdk, "targetSdkVersion") if uses_sdk is not None else None,
             "application_name": _manifest_value(application, "name") if application is not None else None,
+            "application_permission": application_permission,
             "debuggable": _bool_value(_manifest_value(application, "debuggable")) if application is not None else None,
             "permissions": permissions,
             "components": components,

@@ -25,10 +25,17 @@ MANIFEST = b"""<?xml version="1.0" encoding="utf-8"?>
     package="example.app" android:versionCode="7" android:versionName="1.2">
   <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="35" />
   <uses-permission android:name="android.permission.INTERNET" />
-  <application android:name=".App" android:debuggable="false">
+  <application android:name=".App" android:debuggable="false"
+      android:permission="example.permission.APPLICATION">
     <activity android:name=".MainActivity" android:exported="true">
       <intent-filter><action android:name="android.intent.action.MAIN" /></intent-filter>
     </activity>
+    <provider android:name=".DataProvider" android:exported="true"
+        android:readPermission="example.permission.READ"
+        android:writePermission="example.permission.WRITE" />
+    <provider android:name=".GeneralProvider" android:exported="true"
+        android:permission="example.permission.PROVIDER" />
+    <provider android:name=".InheritedProvider" android:exported="true" />
   </application>
 </manifest>
 """
@@ -148,6 +155,7 @@ class ServerSchemaTests(unittest.TestCase):
     def test_every_tool_parameter_has_llm_guidance(self):
         server = create_server([Path.cwd()], worker_count=1)
         self.assertIn("apk_find_method_references finds method call sites", server.instructions)
+        self.assertIn("a null declared permission alone does not mean unprotected", server.instructions)
         for tool in server._tool_manager.list_tools():
             self.assertTrue(tool.description, tool.name)
             for name, schema in tool.parameters.get("properties", {}).items():
@@ -159,6 +167,11 @@ class ServerSchemaTests(unittest.TestCase):
         self.assertIn("do not pass a symbolic owner->member query", body_query)
         descriptor = tools["apk_disassemble_method"].parameters["properties"]["descriptor"]
         self.assertIn("copy it directly from apk_get_class_outline", descriptor["description"])
+        manifest_tool = tools["apk_get_manifest"]
+        self.assertIn("provider read/write", manifest_tool.description)
+        manifest_component = manifest_tool.output_schema["$defs"]["ManifestComponent"]["properties"]
+        self.assertIn("null does not mean", manifest_component["permission"]["description"])
+        self.assertIn("android:readPermission", manifest_component["read_permission"]["description"])
 
     def test_reference_tools_make_invalid_combinations_unrepresentable(self):
         server = create_server([Path.cwd()], worker_count=1)
@@ -202,6 +215,45 @@ class ServerSchemaTests(unittest.TestCase):
 
 
 class McpIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_manifest_reports_effective_component_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "fixture.apk"
+            make_apk(apk)
+            server = create_server([directory], worker_count=1)
+            async with Client(server) as client:
+                opened = await client.call_tool("load_artifact", {"path": str(apk)})
+                manifest = await client.call_tool(
+                    "apk_get_manifest",
+                    {"analysis_id": opened.structured_content["analysis_id"]},
+                )
+                self.assertEqual(
+                    manifest.structured_content["application_permission"],
+                    "example.permission.APPLICATION",
+                )
+                components = {item["name"]: item for item in manifest.structured_content["components"]}
+                self.assertEqual(
+                    components[".MainActivity"]["effective_permission"],
+                    "example.permission.APPLICATION",
+                )
+                provider = components[".DataProvider"]
+                self.assertIsNone(provider["permission"])
+                self.assertEqual(provider["read_permission"], "example.permission.READ")
+                self.assertEqual(provider["write_permission"], "example.permission.WRITE")
+                self.assertEqual(provider["effective_read_permission"], "example.permission.READ")
+                self.assertEqual(provider["effective_write_permission"], "example.permission.WRITE")
+                general_provider = components[".GeneralProvider"]
+                self.assertEqual(general_provider["effective_read_permission"], "example.permission.PROVIDER")
+                self.assertEqual(general_provider["effective_write_permission"], "example.permission.PROVIDER")
+                inherited_provider = components[".InheritedProvider"]
+                self.assertEqual(
+                    inherited_provider["effective_read_permission"],
+                    "example.permission.APPLICATION",
+                )
+                self.assertEqual(
+                    inherited_provider["effective_write_permission"],
+                    "example.permission.APPLICATION",
+                )
+
     async def test_outline_descriptor_round_trips_to_method_tools(self):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "parameters.apk"

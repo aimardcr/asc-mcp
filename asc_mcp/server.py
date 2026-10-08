@@ -135,6 +135,8 @@ SERVER_INSTRUCTIONS = (
     "Copy method descriptors and field types from apk_get_class_outline to select exact overloads. Reference-hit "
     "evidence reports each opcode, caller-relative byte offset, access kind, and exact target; use it before "
     "requesting a full disassembly. "
+    "For component exposure, use effective_permission and provider effective_read_permission and "
+    "effective_write_permission; a null declared permission alone does not mean unprotected. "
     "apk_search_method_bodies only substring-matches rendered Dalvik opcode and operand text. Use apk_list_classes "
     "to resolve class names before outline, source, disassembly, hierarchy, or call-graph calls. Class parameters "
     "accept Java dotted names or Dalvik descriptors. Follow next_cursor until null and call close_artifact when "
@@ -266,7 +268,7 @@ def create_server(
             Field(description="Include the complete decoded AndroidManifest.xml text in the xml field."),
         ] = False,
     ) -> ManifestResult:
-        """Inspect package, SDK, permissions, and components when the artifact has the manifest capability."""
+        """Inspect manifest metadata and effective component permissions, including provider read/write controls."""
         result = await _run(ctx, _session(ctx, analysis_id), "manifest", include_xml=include_xml)
         return ManifestResult.model_validate(result)
 

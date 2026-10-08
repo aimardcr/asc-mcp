@@ -24,7 +24,7 @@ the original benchmark, not a guarantee for every artifact or MCP client.
 
 ## Features
 
-- Structured manifest, package, SDK, permission, and component analysis
+- Structured manifest, package, SDK, and component analysis with effective provider read/write permissions
 - Class listing, outlines, on-demand Java source, and Dalvik disassembly
 - Descriptor-aware string, type, method, and field cross-reference search
 - Reference evidence with opcode, method-relative offset, access type, and exact target
