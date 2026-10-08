@@ -1,35 +1,33 @@
-# Source releases
+# Releases
 
-Python 3.11 or 3.12 is required. Extract `ASC-vX.Y.Z-source.zip`, enter the
-extracted directory, and run:
+ASC MCP supports APK, DEX, JAR, AAB, AAR, APKS, XAPK, and ZIP inputs and requires
+Python 3.10 or newer. A source archive contains the standard
+Python project metadata and can be installed after extraction:
 
 ```sh
-python -m pip install -r requirements.txt
-python main.py --help
-python main.py getclass app.apk com.example.Main --debug
-python main.py findrefs app.apk string token
-python main.py app.apk --gui
+python -m pip install .
+asc-mcp
 ```
 
-The GUI additionally needs Tk (on Debian/Ubuntu: `python3-tk`). Dependencies
-are installed separately; the archive is not a standalone executable.
-`SHA256SUMS` verifies the downloaded ZIP; it does not change DEX signatures.
+The server uses stdio unless `ASC_MCP_TRANSPORT=streamable-http` is set. Configure
+`ASC_MCP_ALLOWED_ROOTS` before opening artifact files.
 
 ## Maintainers
 
-Merge the PR into `dev-0.1.0` first, then tag the intended commit with
-`vMAJOR.MINOR.PATCH` (or `-alpha.N`, `-beta.N`, `-rc.N`) and push that tag.
-The Release workflow rejects tags outside the development branch and compares
-performance against the tagged commit's first parent, by immutable SHA.
-All unit/integration tests, paired performance checks, and absolute budgets
-must pass on Python 3.11 and 3.12 before publication. A failed gate publishes
-nothing. Prerelease tags create GitHub prereleases.
+Merge the release candidate into the development branch, then tag the intended
+commit with `vMAJOR.MINOR.PATCH` or a supported prerelease suffix and push the
+tag. The release workflow compares performance against the tag's first parent,
+runs the unit and integration suites, builds the deterministic source archive,
+and publishes only after every gate passes.
 
-PR CI also builds the source package and tests its CLI after extraction outside
-the checkout. Only tracked runtime files, requirements, README and docs enter
-the deterministic ZIP; test DEX/APK fixtures and local scripts are excluded.
+PR CI tests Python 3.10 through 3.12, validates in-process and stdio MCP calls,
+runs the core reference workload, and opens the release archive outside the
+checkout.
 
-Local packaging: `python scripts/build_release.py v0.1.0 --output dist`.
-The workflow creates a draft, uploads the ZIP and SHA256SUMS, then publishes it.
-If upload fails, only a draft remains; rerunning replaces draft assets.
-Published releases are never overwritten automatically.
+Build locally with:
+
+```sh
+python scripts/build_release.py v0.2.0 --output dist
+```
+
+The output is `ASC-MCP-v0.2.0-source.zip` plus `SHA256SUMS`.

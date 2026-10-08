@@ -52,7 +52,7 @@ jobs:
           if gh release view "$TAG" --json isDraft > release.json; then
             python -c 'import json; assert json.load(open("release.json"))["isDraft"], "Refusing to overwrite published release"'
           else
-            gh release create "$TAG" --verify-tag --draft --title "ASC $TAG" --generate-notes
+            gh release create "$TAG" --verify-tag --draft --title "ASC MCP $TAG" --generate-notes
           fi
           gh release upload "$TAG" dist/* --clobber
           if [[ "$TAG" == *-* ]]; then

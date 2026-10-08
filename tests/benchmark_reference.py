@@ -19,12 +19,12 @@ FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 
 def _wrap_workload_test(directory, test_name):
     """Rewrite old top-level imports (findrefs, utils, core, models) in workload
-    test scripts to droidasc.asc_core.* so they work with the current package structure."""
+    test scripts to asc_mcp.core.* so they work with the current package structure."""
     workdir = Path(directory)
     src = (workdir / test_name).read_text(encoding='utf-8')
     src = re.sub(
         r'^from (findrefs|utils|core|models)\.',
-        r'from droidasc.asc_core.\1.',
+        r'from asc_mcp.core.\1.',
         src,
         flags=re.MULTILINE,
     )

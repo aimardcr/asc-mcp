@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Checkout performance baseline
@@ -39,8 +39,8 @@ jobs:
         run: python tests/run_tests.py --require-decompiler --suite integration
       - name: Reject material performance regressions against the target branch
         run: python tests/benchmark_compare.py --baseline .performance-base --samples 31
-      - name: Check cold-process startup with --debug
-        run: python tests/benchmark_startup.py --samples 9 --max-total-ms 100 --max-wall-ms 250
+      - name: Check cold MCP startup and decompilation
+        run: python tests/benchmark_startup.py --samples 9 --max-total-ms 1500 --max-wall-ms 2500
       - name: Check supplied DEX benchmarks and 0.0880 s budget
         run: python tests/benchmark_reference.py --samples 9
       - name: Upload benchmark timings and raw debug logs
@@ -55,7 +55,7 @@ jobs:
           if-no-files-found: warn
       - name: Build source release preview
         if: matrix.python-version == '3.12'
-        run: python scripts/build_release.py v0.1.0 --output dist
+        run: python scripts/build_release.py v0.2.0 --output dist
       - name: Upload source release preview
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v7.0.1

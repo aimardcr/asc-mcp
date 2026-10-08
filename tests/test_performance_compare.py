@@ -1,20 +1,20 @@
 import unittest
 
 from performance_compare import compare_pairs
-from benchmark_compare import _stable_cli_findrefs_answer, should_gate
+from benchmark_compare import _stable_findrefs_answer, should_gate
 
 
 class PerformanceComparisonTests(unittest.TestCase):
-    def test_cli_findrefs_answer_ignores_only_matched_payload_text(self):
+    def test_findrefs_answer_ignores_only_matched_payload_text(self):
         base = 'classes.dex | Lfoo/Bar;->run | matched=(truncated)'
         candidate = 'classes.dex | Lfoo/Bar;->run | matched=(full payload)'
         self.assertEqual(
-            _stable_cli_findrefs_answer(base),
-            _stable_cli_findrefs_answer(candidate),
+            _stable_findrefs_answer(base),
+            _stable_findrefs_answer(candidate),
         )
         self.assertNotEqual(
-            _stable_cli_findrefs_answer(base),
-            _stable_cli_findrefs_answer(
+            _stable_findrefs_answer(base),
+            _stable_findrefs_answer(
                 'classes.dex | Lfoo/Baz;->run | matched=(full payload)'
             ),
         )

@@ -1,9 +1,8 @@
-"""Measure cold interpreter startup with a generated APK and the real CLI."""
+"""Measure cold MCP startup and one decompilation call."""
 import argparse
 import json
 from pathlib import Path
 import platform
-import re
 import statistics
 import subprocess
 import sys
@@ -19,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--samples', type=int, default=9)
-    parser.add_argument('--max-total-ms', type=float, default=100)
-    parser.add_argument('--max-wall-ms', type=float, default=250)
+    parser.add_argument('--max-total-ms', type=float, default=1500)
+    parser.add_argument('--max-wall-ms', type=float, default=2500)
     parser.add_argument('--output', type=Path, default=Path('artifacts/startup'))
     args = parser.parse_args()
     if args.samples < 3 or args.max_total_ms <= 0 or args.max_wall_ms <= 0:
@@ -32,34 +31,30 @@ def main():
         apk = Path(directory) / 'fixture.apk'
         with zipfile.ZipFile(apk, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('classes.dex', make_dex())
-        command = [sys.executable, str(ROOT / 'main.py'), 'getclass', str(apk),
-                   'example.Test', '--threads', '1', '--debug']
+        command = [sys.executable, str(ROOT / 'tests' / 'benchmark_mcp.py'), str(apk)]
         for index in range(args.samples):
             start = time.perf_counter()
             try:
                 result = subprocess.run(command, cwd=ROOT, capture_output=True,
                                         text=True, timeout=30)
             except subprocess.TimeoutExpired:
-                errors.append(f'sample {index}: CLI exceeded 30 seconds')
+                errors.append(f'sample {index}: MCP call exceeded 30 seconds')
                 break
             wall_ms = (time.perf_counter() - start) * 1000
             (args.output / f'{index:02d}.stdout.log').write_text(result.stdout, encoding='utf-8')
             (args.output / f'{index:02d}.stderr.log').write_text(result.stderr, encoding='utf-8')
-            if result.returncode or any(text not in result.stdout for text in
-                                       ('class Test', 'void first()', 'void second()')):
+            if result.returncode:
                 errors.append(f'sample {index}: decompilation failed; see logs')
                 break
-            record = {'wall_ms': wall_ms}
-            for key, label in (('total_ms', 'Total Execution Time'),
-                               ('extraction_ms', 'Total Extraction Time'),
-                               ('apk_ms', 'APK Scan Time')):
-                match = re.search(r'\[DEBUG\] ' + label + r': ([\d.]+) us', result.stdout)
-                if match is None:
-                    errors.append(f'sample {index}: missing debug metric {label}')
-                    break
-                record[key] = float(match[1]) / 1000
-            if errors:
+            try:
+                payload = json.loads(result.stdout.splitlines()[-1])
+            except (IndexError, json.JSONDecodeError):
+                errors.append(f'sample {index}: missing MCP benchmark result')
                 break
+            if not payload['source_ok']:
+                errors.append(f'sample {index}: decompilation output mismatch')
+                break
+            record = {'wall_ms': wall_ms, **{key: payload[key] for key in ('open_ms', 'source_ms', 'total_ms')}}
             records.append(record)
     medians = {key: statistics.median(row[key] for row in records)
                for key in records[0]} if records else {}

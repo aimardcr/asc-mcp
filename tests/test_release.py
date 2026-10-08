@@ -20,26 +20,37 @@ class ReleaseTests(unittest.TestCase):
     def test_archive_is_reproducible_and_runs_outside_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            archive = build('v0.1.0-rc.1', root)
+            archive = build('v0.2.0-rc.1', root)
             original = archive.read_bytes()
-            self.assertEqual(build('v0.1.0-rc.1', root).read_bytes(), original)
+            self.assertEqual(build('v0.2.0-rc.1', root).read_bytes(), original)
             self.assertEqual((root / 'SHA256SUMS').read_text().split()[0],
                              hashlib.sha256(original).hexdigest())
             with zipfile.ZipFile(archive) as package:
                 names = package.namelist()
                 self.assertTrue(any(name.endswith('/requirements.txt') for name in names))
-                self.assertIn('ASC-v0.1.0-rc.1/LICENSE', names)
+                self.assertIn('ASC-MCP-v0.2.0-rc.1/LICENSE', names)
+                self.assertIn('ASC-MCP-v0.2.0-rc.1/pyproject.toml', names)
+                self.assertFalse(any(name.endswith('/main.py') or '/analysis/gui/' in name for name in names))
                 self.assertFalse(any(name.endswith(('.dex', '.apk', '/test.py', '/test_findrefs.py'))
                                      or '/tests/' in name or '/.git/' in name for name in names))
                 package.extractall(root)
-            app = root / 'ASC-v0.1.0-rc.1'
+            app = root / 'ASC-MCP-v0.2.0-rc.1'
             apk = root / 'fixture.apk'
             with zipfile.ZipFile(apk, 'w', compression=zipfile.ZIP_DEFLATED) as package:
                 package.writestr('classes.dex', make_dex())
-            for args, expected in ((['listclass', str(apk), '--prefix', 'example'], 'Lexample/Test;'),
-                                   (['findrefs', str(apk), 'string', 'token'], 'token'),
-                                   (['getclass', str(apk), 'example.Test'], 'class Test')):
-                result = subprocess.run([sys.executable, str(app / 'main.py'), *args],
-                                        cwd=root, capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(expected, result.stdout)
+            script = (
+                "from asc_mcp.server import create_server; "
+                "from asc_mcp.analysis.artifact_handler import ArtifactHandler; "
+                "server=create_server([r'" + str(root) + "'], 1); "
+                "assert len(server._tool_manager.list_tools()) == 25; "
+                "print(*ArtifactHandler(r'" + str(apk) + "').list_classes('example'), sep='\\n')"
+            )
+            result = subprocess.run(
+                [sys.executable, '-c', script],
+                cwd=app,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, 'Lexample/Test;\n')

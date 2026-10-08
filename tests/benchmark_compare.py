@@ -1,4 +1,4 @@
-"""Compare module and CLI performance against a base checkout on one runner."""
+"""Compare core and service performance against a base checkout on one runner."""
 import argparse
 import hashlib
 import json
@@ -26,8 +26,8 @@ GATED_METRICS = {
     'unit/method_ref_scan',
     'unit/field_ref_scan',
     'core/decompile',
-    'cli_getclass/cli_getclass',
-    'cli_findrefs/cli_findrefs',
+    'service_getclass/service_getclass',
+    'service_findrefs/service_findrefs',
 }
 
 
@@ -39,7 +39,7 @@ def revision(root):
     return subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
 
 
-def _stable_cli_findrefs_answer(text):
+def _stable_findrefs_answer(text):
     # String decoding fixes may intentionally change matched payload text while
     # preserving the referenced DEX/method rows and their count.
     return sorted(
@@ -50,17 +50,15 @@ def _stable_cli_findrefs_answer(text):
 
 
 def _wrap_workload_test(root, directory, test_name):
-    """Wrap a workload test file so old top-level imports (findrefs, utils, core, models)
-    are rewritten to droidasc.asc_core.*, matching the current package structure."""
+    """Wrap a supplied workload for the selected checkout's package layout."""
     import re
     from pathlib import Path
     workdir = directory if isinstance(directory, Path) else Path(directory)
     src = (workdir / test_name).read_text(encoding='utf-8')
-    # Rewrite: `from findrefs.|from utils.|from core.|from models.`
-    #       → `from droidasc.asc_core.\1.`
+    package = 'asc_mcp' if (Path(root) / 'asc_mcp').is_dir() else 'droidasc'
     src = re.sub(
         r'^from (findrefs|utils|core|models)\.',
-        r'from droidasc.asc_core.\1.',
+        rf'from {package}.core.\1.' if package == 'asc_mcp' else rf'from {package}.asc_core.\1.',
         src,
         flags=re.MULTILINE,
     )
@@ -74,6 +72,39 @@ def _wrap_workload_test(root, directory, test_name):
     return wrapper
 
 
+def _wrap_service_test(root, directory, case, label):
+    package = 'asc_mcp' if (Path(root) / 'asc_mcp').is_dir() else 'droidasc'
+    client = 'analysis' if package == 'asc_mcp' else 'asc_client'
+    handler_module = 'artifact_handler' if package == 'asc_mcp' else 'apk_handler'
+    handler_class = 'ArtifactHandler' if package == 'asc_mcp' else 'ApkHandler'
+    if case == 'service_getclass':
+        body = (
+            f'from {package}.{client}.{handler_module} import {handler_class}\n'
+            f'from {package}.{client}.asc_handler import AscHandler\n'
+            'start=time.perf_counter()\n'
+            f"hit={handler_class}('fixture.apk', max_workers=1).get_class_dex('Lcom/google/android/material/timepicker/ClockFaceView;')\n"
+            "source=AscHandler().getclass(hit[1], 'Lcom/google/android/material/timepicker/ClockFaceView;')\n"
+            "print(f'[BENCH] {(time.perf_counter()-start)*1000000:.2f}')\n"
+            'print(source)\n'
+        )
+    else:
+        body = (
+            f'from {package}.{client}.{handler_module} import {handler_class}\n'
+            'start=time.perf_counter()\n'
+            "rows=[]\n"
+            f"handler={handler_class}('fixture.apk', max_workers=1)\n"
+            "for _, batch in handler.for_each_findrefs('string', {'string': 'create'}): rows.extend(batch)\n"
+            "print(f'[BENCH] {(time.perf_counter()-start)*1000000:.2f}')\n"
+            "print('\\n'.join(rows))\n"
+        )
+    wrapper = Path(directory) / f'_benchmark_{label}_{case}.py'
+    wrapper.write_text(
+        f'import sys, time\nsys.path.insert(0, {str(root)!r})\n{body}',
+        encoding='utf-8',
+    )
+    return wrapper
+
+
 def measure(root, directory, case, output, sample):
     env = dict(os.environ, PYTHONPATH='', PYTHONHASHSEED='0')
     if case in ('unit', 'core'):
@@ -81,11 +112,7 @@ def measure(root, directory, case, output, sample):
         wrapper = _wrap_workload_test(root, directory, test_name)
         command = [sys.executable, str(wrapper)]
     else:
-        command = [sys.executable, str(root / 'main.py')]
-        if case == 'cli_getclass':
-            command += ['getclass', 'fixture.apk', 'com.google.android.material.timepicker.ClockFaceView', '--threads', '1', '--debug']
-        else:
-            command += ['findrefs', 'fixture.apk', '--threads', '1', '--debug', 'string', 'create']
+        command = [sys.executable, str(_wrap_service_test(root, directory, case, output.name))]
     result = subprocess.run(command, cwd=directory, env=env, capture_output=True, text=True, timeout=30)
     (output / f'{case}-{sample}.stdout.log').write_text(result.stdout, encoding='utf-8')
     (output / f'{case}-{sample}.stderr.log').write_text(result.stderr, encoding='utf-8')
@@ -101,16 +128,16 @@ def measure(root, directory, case, output, sample):
         times = {'decompile': float(match[1]) * 1e6}
         answer = result.stdout.split('[INFO]')[0].strip()
     else:
-        match = re.search(r'\[DEBUG\] Total Execution Time: ([\d.]+) us', result.stdout)
+        match = re.search(r'^\[BENCH\] ([\d.]+)$', result.stdout, re.M)
         if match is None:
-            raise ValueError('missing CLI timing')
+            raise ValueError('missing service timing')
         times = {case: float(match[1])}
         answer = (
-            result.stdout.split('-' * 50)[-1].strip()
-            if case == 'cli_getclass'
-            else _stable_cli_findrefs_answer(result.stdout)
+            result.stdout.split(match.group(0), 1)[1].strip()
+            if case == 'service_getclass'
+            else _stable_findrefs_answer(result.stdout)
         )
-    if not answer or (case in ('core', 'cli_getclass') and 'class ClockFaceView' not in answer):
+    if not answer or (case in ('core', 'service_getclass') and 'class ClockFaceView' not in answer):
         raise ValueError(f'{case}: missing result')
     return times, answer
 
@@ -120,8 +147,8 @@ def main():
     parser.add_argument('--baseline', type=Path, required=True)
     parser.add_argument('--candidate', type=Path, default=ROOT)
     parser.add_argument('--samples', type=int, default=31)
-    parser.add_argument('--cases', nargs='+', choices=('unit', 'core', 'cli_getclass', 'cli_findrefs'),
-                        default=['unit', 'core', 'cli_getclass', 'cli_findrefs'])
+    parser.add_argument('--cases', nargs='+', choices=('unit', 'core', 'service_getclass', 'service_findrefs'),
+                        default=['unit', 'core', 'service_getclass', 'service_findrefs'])
     parser.add_argument('--output', type=Path, default=Path('artifacts/comparison'))
     args = parser.parse_args()
     if args.samples < 15:
