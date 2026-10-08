@@ -429,7 +429,7 @@ def create_server(
         cursor: PageCursor = None,
         limit: PageLimit = 200,
     ) -> ReferencePage:
-        """Find type-operand instructions with opcode, offset, and exact-target evidence."""
+        """Find new-instance, check-cast, const-class, and other type instructions with exact evidence."""
         result = await _run(
             ctx,
             _session(ctx, analysis_id),
