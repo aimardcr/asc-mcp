@@ -2,8 +2,8 @@ import base64
 import struct
 import unittest
 
-from droidasc.asc_core.core.dex.dex_manager import DexManager
-from droidasc.asc_core.utils.tinydex import DEX, _decode_mutf8_fallback
+from asc_mcp.core.core.dex.dex_manager import DexManager
+from asc_mcp.core.utils.tinydex import DEX, _decode_mutf8_fallback
 
 
 ISSUE_DEX = base64.b64decode(

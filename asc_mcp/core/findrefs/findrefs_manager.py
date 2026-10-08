@@ -78,6 +78,12 @@ class FindRefManager:
             self.code_scanner = scanner
         return scanner
 
+    def _method_descriptor(self, method_idx):
+        prototype = self.dex.methods[method_idx].prototype
+        parameters = "".join(str(item) for item in prototype.parameters_type)
+        return_type = self.dex.types[prototype.return_type_idx].descriptor
+        return f"({parameters}){return_type}"
+
     # find struct: {"string" : "foo", "type" : "bar", "method" : {...}, "field" : {...}}
     # locate result will overwrite input find in-place, then scanner writes ref mids back into each key
     def find_ref(self, find : dict, mark = False):
@@ -91,11 +97,21 @@ class FindRefManager:
             if find["type"]:
                 has_idx = True
         if "method" in find:
+            descriptor = find["method"].get("descriptor")
             find["method"] = self._get_method_locator(True).locate(find["method"])
+            if descriptor:
+                find["method"] = {
+                    idx for idx in find["method"] if self._method_descriptor(idx) == descriptor
+                }
             if find["method"]:
                 has_idx = True
         if "field" in find:
+            descriptor = find["field"].get("descriptor")
             find["field"] = self._get_field_locator(True).locate(find["field"])
+            if descriptor:
+                find["field"] = {
+                    idx for idx in find["field"] if self.dex.fields[idx].type.descriptor == descriptor
+                }
             if find["field"]:
                 has_idx = True
 

@@ -1,2 +1,3 @@
 androguard==4.1.3
+mcp>=2,<3
 mutf8==1.1.0

@@ -19,6 +19,9 @@ def get_manifest_xml(apk_path : str, pretty : bool = True) -> str:
     with zipfile.ZipFile(apk_path) as zf:
         manifest_data = zf.read("AndroidManifest.xml")
 
+    if manifest_data.lstrip().startswith(b"<"):
+        return manifest_data.decode("utf-8", errors="replace")
+
     _quiet_loguru()
     from androguard.core.axml import AXMLPrinter
     _quiet_loguru()

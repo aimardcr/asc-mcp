@@ -25,6 +25,8 @@ if __name__ == '__main__':
                     yield item
         suite = unittest.TestSuite(test for test in tests(suite)
                                    if ('test_decompiler.DecompilerTests.' in test.id()
+                                       or 'test_mcp_server.McpIntegrationTests.' in test.id()
+                                       or 'test_mcp_server.StdioIntegrationTests.' in test.id()
                                        or test.id().endswith('test_archive_is_reproducible_and_runs_outside_checkout'))
                                    == (args.suite == 'integration'))
     if suite.countTestCases() == 0:

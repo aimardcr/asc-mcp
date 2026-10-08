@@ -354,8 +354,7 @@ def _dalvik_class_name(name : str) -> str:
     return name
 
 
-# reuse androguard daddecompiler's token type, we can extract source' semantics, enhance gui xref ability
-# 20260921 we may extract daddecompiler from androguard in future, for better development
+# Preserve Androguard tokens so source offsets map back to members.
 def _source_with_member_references(source_ext):
     parts = []
     references = []

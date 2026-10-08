@@ -8,8 +8,9 @@ import time
 import types
 import zlib
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
+from pathlib import Path
 
-from droidasc.asc_client.dex_container import iter_logical_dex_buffers
+from asc_mcp.analysis.dex_container import iter_logical_dex_buffers
 
 
 _U16 = struct.Struct("<H")
@@ -20,12 +21,11 @@ _CD_SIG = b"PK\x01\x02"
 _LH_SIG = b"PK\x03\x04"
 _EOCD_SIG = b"PK\x05\x06"
 _DEX_SUFFIX = b".dex"
-_SLASH = ord("/")
 _DEFLATE_CHUNK = 1 << 19
 
-_WORKER_APK_PATH = None
-_WORKER_APK_FP = None
-_WORKER_APK_MM = None
+_WORKER_ARTIFACT_PATH = None
+_WORKER_ARTIFACT_FP = None
+_WORKER_ARTIFACT_MM = None
 
 
 def _process_pool_context():
@@ -136,7 +136,10 @@ def _find_eocd(mm : mmap.mmap) -> int:
     return mm.rfind(_EOCD_SIG, search_start)
 
 
-def _parse_cd_dex_entries(mm : mmap.mmap):
+def _parse_cd_dex_entries(mm : mmap.mmap, raw_name : str = "classes.dex"):
+    if mm[:4] == b"dex\n":
+        return [(raw_name, len(mm), len(mm), 0, -1)]
+
     eocd_idx = _find_eocd(mm)
     if eocd_idx < 0:
         raise ValueError("EOCD not found")
@@ -145,44 +148,6 @@ def _parse_cd_dex_entries(mm : mmap.mmap):
     cd_off = _U32_FROM(mm, eocd_idx + 16)[0]
     cd_end = cd_off + cd_size
     entries = []
-    seen_names = set()
-    pos = cd_off
-
-    while True:
-        pos = mm.find(b"classes", pos, cd_end)
-        if pos < 0:
-            break
-        header_off = pos - 46
-        pos += 7
-        if header_off < cd_off or mm[header_off:header_off + 4] != _CD_SIG:
-            continue
-
-        name_len = _U16_FROM(mm, header_off + 28)[0]
-        name_start = pos - 7
-        name_end = name_start + name_len
-        if name_end > cd_end:
-            continue
-
-        name_bytes = mm[name_start:name_end]
-        if (
-            not name_bytes.endswith(_DEX_SUFFIX)
-            or _SLASH in name_bytes
-            or name_bytes in seen_names
-        ):
-            continue
-
-        seen_names.add(name_bytes)
-        entries.append((
-            name_bytes.decode("utf-8", errors="ignore"),
-            _U32_FROM(mm, header_off + 24)[0],
-            _U32_FROM(mm, header_off + 20)[0],
-            _U32_FROM(mm, header_off + 42)[0],
-            _U16_FROM(mm, header_off + 10)[0],
-        ))
-
-    if entries:
-        return entries
-
     ptr = cd_off
     while ptr + 46 <= cd_end:
         if mm[ptr:ptr + 4] != _CD_SIG:
@@ -194,7 +159,7 @@ def _parse_cd_dex_entries(mm : mmap.mmap):
         name_start = ptr + 46
         name_end = name_start + name_len
         name_bytes = mm[name_start:name_end]
-        if name_bytes.endswith(_DEX_SUFFIX) and _SLASH not in name_bytes:
+        if name_bytes.lower().endswith(_DEX_SUFFIX):
             entries.append((
                 name_bytes.decode("utf-8", errors="ignore"),
                 _U32_FROM(mm, ptr + 24)[0],
@@ -208,14 +173,14 @@ def _parse_cd_dex_entries(mm : mmap.mmap):
     return entries
 
 
-def _close_worker_apk():
-    global _WORKER_APK_PATH, _WORKER_APK_FP, _WORKER_APK_MM
+def _close_worker_artifact():
+    global _WORKER_ARTIFACT_PATH, _WORKER_ARTIFACT_FP, _WORKER_ARTIFACT_MM
 
-    mm = _WORKER_APK_MM
-    fp = _WORKER_APK_FP
-    _WORKER_APK_MM = None
-    _WORKER_APK_FP = None
-    _WORKER_APK_PATH = None
+    mm = _WORKER_ARTIFACT_MM
+    fp = _WORKER_ARTIFACT_FP
+    _WORKER_ARTIFACT_MM = None
+    _WORKER_ARTIFACT_FP = None
+    _WORKER_ARTIFACT_PATH = None
 
     if mm is not None:
         mm.close()
@@ -223,22 +188,22 @@ def _close_worker_apk():
         fp.close()
 
 
-atexit.register(_close_worker_apk)
+atexit.register(_close_worker_artifact)
 
 
-def _get_worker_apk_mm(apk_path : str):
-    global _WORKER_APK_PATH, _WORKER_APK_FP, _WORKER_APK_MM
+def _get_worker_artifact_mm(artifact_path : str):
+    global _WORKER_ARTIFACT_PATH, _WORKER_ARTIFACT_FP, _WORKER_ARTIFACT_MM
 
-    mm = _WORKER_APK_MM
-    if mm is not None and _WORKER_APK_PATH == apk_path:
+    mm = _WORKER_ARTIFACT_MM
+    if mm is not None and _WORKER_ARTIFACT_PATH == artifact_path:
         return mm
 
-    _close_worker_apk()
-    fp = open(apk_path, "rb")
+    _close_worker_artifact()
+    fp = open(artifact_path, "rb")
     mm = mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ)
-    _WORKER_APK_PATH = apk_path
-    _WORKER_APK_FP = fp
-    _WORKER_APK_MM = mm
+    _WORKER_ARTIFACT_PATH = artifact_path
+    _WORKER_ARTIFACT_FP = fp
+    _WORKER_ARTIFACT_MM = mm
     return mm
 
 
@@ -265,6 +230,8 @@ def _inflate_deflate_chunks(comp_view, stop_event):
 
 def _inflate_dex(mm : mmap.mmap, entry, stop_event = None):
     name, uncomp_size, comp_size, local_header_off, comp_method = entry
+    if comp_method == -1:
+        return bytes(mm)
     if mm[local_header_off:local_header_off + 4] != _LH_SIG:
         raise ValueError("bad local header signature")
 
@@ -287,21 +254,33 @@ def _inflate_dex(mm : mmap.mmap, entry, stop_event = None):
     return data
 
 
-def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict, aggregate : bool = True):
-    from droidasc.asc_client.asc_handler import AscHandler
+def _findrefs_worker(
+    artifact_path : str,
+    entry,
+    find_type : str,
+    find : dict,
+    aggregate : bool = True,
+    structured : bool = False,
+):
+    from asc_mcp.analysis.asc_handler import AscHandler
 
-    mm = _get_worker_apk_mm(apk_path)
+    mm = _get_worker_artifact_mm(artifact_path)
     t0 = time.perf_counter()
     data = _inflate_dex(mm, entry)
     t1 = time.perf_counter()
-    lines = []
+    results = []
     handler = AscHandler(False)
     for dex_name, dex_buf in iter_logical_dex_buffers(entry[0], data):
-        lines.extend(handler.findrefs(dex_name, dex_buf, find_type, find, aggregate=aggregate))
+        if structured:
+            results.extend(
+                handler.findrefs_structured(dex_name, dex_buf, find_type, find, aggregate=aggregate)
+            )
+        else:
+            results.extend(handler.findrefs(dex_name, dex_buf, find_type, find, aggregate=aggregate))
     t2 = time.perf_counter()
     return (
         entry[0],
-        lines,
+        results,
         (t1 - t0) * 1000000,
         (t2 - t1) * 1000000,
         os.getpid(),
@@ -343,9 +322,9 @@ def _inflate_and_hit(mm : mmap.mmap, entry, target_bytes : bytes, stop_event : t
     return hit, hit_name, hit_data
 
 
-class ApkHandler:
-    def __init__(self, apk_path : str, debug : bool = False, max_workers : int = 8):
-        self.apk_path = apk_path
+class ArtifactHandler:
+    def __init__(self, artifact_path : str, debug : bool = False, max_workers : int = 8):
+        self.artifact_path = artifact_path
         self.debug = debug
         self.max_workers = max_workers
 
@@ -353,17 +332,17 @@ class ApkHandler:
         if self.debug:
             print(msg)
 
-    def _open_apk(self):
-        fp = open(self.apk_path, "rb")
+    def _map_artifact(self):
+        fp = open(self.artifact_path, "rb")
         mm = mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ)
         return fp, mm
 
     def get_class_dex(self, dalvik_class : str):
         target_bytes = dalvik_class.encode("utf-8")
         t_start = time.perf_counter()
-        fp, mm = self._open_apk()
+        fp, mm = self._map_artifact()
         try:
-            entries = _parse_cd_dex_entries(mm)
+            entries = _parse_cd_dex_entries(mm, Path(self.artifact_path).name)
             entries.sort(key=lambda x: x[2])
             if self.debug:
                 t_ready = time.perf_counter()
@@ -472,9 +451,9 @@ class ApkHandler:
             return names
 
         t_start = time.perf_counter()
-        fp, mm = self._open_apk()
+        fp, mm = self._map_artifact()
         try:
-            entries = _parse_cd_dex_entries(mm)
+            entries = _parse_cd_dex_entries(mm, Path(self.artifact_path).name)
             if not entries:
                 return []
 
@@ -509,15 +488,21 @@ class ApkHandler:
             fp.close()
 
     def for_each_findrefs(self, find_type : str, find : dict):
+        yield from self._for_each_findrefs(find_type, find, False)
+
+    def for_each_findrefs_structured(self, find_type : str, find : dict):
+        yield from self._for_each_findrefs(find_type, find, True)
+
+    def _for_each_findrefs(self, find_type : str, find : dict, structured : bool):
         # imported before the timer so this once-per-process import is not charged to a
-        # single search; it used to happen at apk_handler import time, and keeping the
+        # single search; it used to happen at module import time, and keeping the
         # getclass path (thread pool only) from paying for it is worth ~8ms of startup
         from concurrent.futures import ProcessPoolExecutor
 
         t_start = time.perf_counter()
-        fp, mm = self._open_apk()
+        fp, mm = self._map_artifact()
         try:
-            entries = _parse_cd_dex_entries(mm)
+            entries = _parse_cd_dex_entries(mm, Path(self.artifact_path).name)
             entries.sort(key=lambda x: x[2])
         finally:
             mm.close()
@@ -534,7 +519,15 @@ class ApkHandler:
                                  mp_context=_process_pool_context()) as ex:
             futures = {}
             for entry in entries:
-                fut = ex.submit(_findrefs_worker, self.apk_path, entry, find_type, find)
+                fut = ex.submit(
+                    _findrefs_worker,
+                    self.artifact_path,
+                    entry,
+                    find_type,
+                    find,
+                    True,
+                    structured,
+                )
                 futures[fut] = entry[0]
 
             while futures:

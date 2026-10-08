@@ -8,6 +8,7 @@ import unittest
 import zipfile
 
 from dex_fixture import make_dex, make_static_field_dex
+from asc_mcp.analysis.artifact_handler import ArtifactHandler
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,20 +77,10 @@ def make_dex041_container():
 
 
 class ListClassTests(unittest.TestCase):
-    def run_cli(self, apk, *args, no_site=False):
-        command = [sys.executable]
-        if no_site:
-            command.append("-S")
-        command.extend([str(ROOT / "main.py"), "listclass", str(apk), *args])
-        return subprocess.run(
-            command,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+    def list_classes(self, apk, prefix=None, workers=8):
+        return ArtifactHandler(str(apk), max_workers=workers).list_classes(prefix)
 
-    def test_cli_filters_normalized_prefix_for_stored_and_deflated_dex(self):
+    def test_core_filters_normalized_prefix_for_stored_and_deflated_dex(self):
         data = make_class_only_dex([
             "Lcom/xxx/First;",
             "Lcom/xxx/internal/Second;",
@@ -103,32 +94,38 @@ class ListClassTests(unittest.TestCase):
                     with self.subTest(compression=compression, prefix=prefix):
                         with zipfile.ZipFile(apk, "w", compression=compression) as archive:
                             archive.writestr("classes.dex", data)
-                        result = self.run_cli(apk, "--prefix", prefix)
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(result.stdout, expected)
+                        result = self.list_classes(apk, prefix)
+                        self.assertEqual("".join(f"{name}\n" for name in result), expected)
 
-    def test_cli_preserves_dex_order_for_stored_and_deflated_multidex(self):
+    def test_core_preserves_dex_order_for_stored_and_deflated_multidex(self):
         expected = "Lexample/Test;\nLexample/Statics;\nLexample/Test;\n"
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "fixture.apk"
-            output = Path(directory) / "classes.txt"
             for compression in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
                 with self.subTest(compression=compression):
                     with zipfile.ZipFile(apk, "w", compression=compression) as archive:
                         archive.writestr("classes.dex", make_dex())
                         archive.writestr("classes2.dex", make_static_field_dex())
                         archive.writestr("classes3.dex", make_dex())
-                    result = self.run_cli(apk, "--threads", "2", "-o", str(output))
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(result.stdout, "")
-                    self.assertEqual(output.read_text(encoding="utf-8"), expected)
+                    result = self.list_classes(apk, workers=2)
+                    self.assertEqual("".join(f"{name}\n" for name in result), expected)
 
-    def test_cli_does_not_require_site_packages(self):
+    def test_core_does_not_require_site_packages(self):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "fixture.apk"
             with zipfile.ZipFile(apk, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("classes.dex", make_dex())
-            result = self.run_cli(apk, no_site=True)
+            script = (
+                "from asc_mcp.analysis.artifact_handler import ArtifactHandler; "
+                f"print(*ArtifactHandler({str(apk)!r}).list_classes(), sep='\\n')"
+            )
+            result = subprocess.run(
+                [sys.executable, "-S", "-c", script],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "Lexample/Test;\n")
 
@@ -141,9 +138,7 @@ class ListClassTests(unittest.TestCase):
             apk = Path(directory) / "fixture.apk"
             with zipfile.ZipFile(apk, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("classes.dex", data)
-            result = self.run_cli(apk)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout, "Lexample/Test;\n")
+            self.assertEqual(self.list_classes(apk), ["Lexample/Test;"])
 
     def test_dex041_container_lists_every_logical_member(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -152,12 +147,9 @@ class ListClassTests(unittest.TestCase):
                 with self.subTest(compression=compression):
                     with zipfile.ZipFile(apk, "w", compression=compression) as archive:
                         archive.writestr("classes.dex", make_dex041_container())
-                    result = self.run_cli(apk, "--threads", "1")
-                    self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(
-                        result.stdout,
-                        "Lalpha/First;\nLshared/Duplicate;\n"
-                        "Lbeta/Second;\nLshared/Duplicate;\n",
+                        self.list_classes(apk, workers=1),
+                        ["Lalpha/First;", "Lshared/Duplicate;", "Lbeta/Second;", "Lshared/Duplicate;"],
                     )
 
     def test_bad_class_type_index_is_a_clean_error(self):
@@ -169,27 +161,24 @@ class ListClassTests(unittest.TestCase):
             apk = Path(directory) / "fixture.apk"
             with zipfile.ZipFile(apk, "w", compression=zipfile.ZIP_STORED) as archive:
                 archive.writestr("classes.dex", data)
-            result = self.run_cli(apk)
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("Error: bad class_def->type_idx", result.stderr)
+            with self.assertRaisesRegex(ValueError, "bad class_def->type_idx"):
+                self.list_classes(apk)
 
     def test_worker_count_must_be_positive(self):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "fixture.apk"
             with zipfile.ZipFile(apk, "w") as archive:
                 archive.writestr("classes.dex", make_dex())
-            result = self.run_cli(apk, "--threads", "0")
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("Worker count must be greater than zero", result.stderr)
+            with self.assertRaisesRegex(ValueError, "Worker count must be greater than zero"):
+                self.list_classes(apk, workers=0)
 
     def test_empty_prefix_is_a_clean_error(self):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "fixture.apk"
             with zipfile.ZipFile(apk, "w") as archive:
                 archive.writestr("classes.dex", make_dex())
-            result = self.run_cli(apk, "--prefix", " ")
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("Class prefix cannot be empty", result.stderr)
+            with self.assertRaisesRegex(ValueError, "Class prefix cannot be empty"):
+                self.list_classes(apk, prefix=" ")
 
 
 if __name__ == "__main__":

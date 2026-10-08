@@ -198,6 +198,7 @@ class CodeItemScanner:
         self.off_end = self.insn_locator.code_item_end
         self.buf = self.insn_locator.buf
         self.submem = self.buf[self.off_start: self.off_end]
+        self.matched_offsets = {}
 
     # dense opcode classes: a bytes.translate per byte position plus a bigint AND
     # replaces the regex charset scan. Only the opcode byte and the high idx byte are
@@ -265,7 +266,9 @@ class CodeItemScanner:
         for type_ in scan:
             if not scan[type_]:
                 scan[type_] = []
+                self.matched_offsets[type_] = []
                 continue
             insn_offs = self._scan_code_item(type_, scan[type_], mark)
+            self.matched_offsets[type_] = insn_offs
             mids = self.insn_locator.locate(insn_offs)
             scan[type_] = mids

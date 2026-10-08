@@ -4,11 +4,11 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from dex_fixture import make_dex
-from droidasc.asc_client.asc_handler import AscHandler
-from droidasc.asc_core.findrefs.locator.insn_locator import InsnLocator
-from droidasc.asc_core.findrefs.scan.code_item_scan import CodeItemScanner
-from droidasc.asc_core.utils.tinydex import DEX
+from dex_fixture import make_dex, make_instance_field_dex, make_invoke_dex, make_static_field_dex
+from asc_mcp.analysis.asc_handler import AscHandler
+from asc_mcp.core.findrefs.locator.insn_locator import InsnLocator
+from asc_mcp.core.findrefs.scan.code_item_scan import CodeItemScanner
+from asc_mcp.core.utils.tinydex import DEX
 
 
 class ReferenceTests(unittest.TestCase):
@@ -67,6 +67,65 @@ class ReferenceTests(unittest.TestCase):
         self.assertTrue(any('->first' in line for line in lines))
         self.assertTrue(any('->second' in line for line in lines))
 
+    def test_structured_string_evidence_includes_instruction_and_value(self):
+        rows = AscHandler().findrefs_structured(
+            'fixture.dex', make_dex(), 'string', {'string': 'token'}
+        )
+        evidence = rows[0]['evidence'][0]
+        self.assertEqual(evidence['offset'], 0)
+        self.assertEqual(evidence['opcode'], 'const-string')
+        self.assertEqual(evidence['access'], 'load')
+        self.assertEqual(evidence['target_value'], 'token')
+
+    def test_method_descriptor_filters_reference_targets(self):
+        query = {
+            'method': {
+                'class': ['example/Target', False],
+                'method': ['callToMethod', True],
+                'descriptor': '()V',
+            }
+        }
+        rows = AscHandler().findrefs_structured('fixture.dex', make_invoke_dex(), 'method', query)
+        evidence = rows[0]['evidence'][0]
+        self.assertEqual(evidence['opcode'], 'invoke-static')
+        self.assertEqual(evidence['access'], 'invoke')
+        self.assertEqual(evidence['target_descriptor'], '()V')
+
+        query['method']['descriptor'] = '(I)V'
+        self.assertEqual(
+            AscHandler().findrefs_structured('fixture.dex', make_invoke_dex(), 'method', query),
+            [],
+        )
+
+    def test_field_evidence_classifies_reads_and_writes(self):
+        query = {
+            'field': {
+                'class': ['Lexample/Test;', True],
+                'field': ['a', True],
+                'descriptor': 'Lexample/Target;',
+            }
+        }
+        rows = AscHandler().findrefs_structured(
+            'fixture.dex', make_instance_field_dex(), 'field', query
+        )
+        evidence = rows[0]['evidence'][0]
+        self.assertEqual(evidence['opcode'], 'iget-object')
+        self.assertEqual(evidence['access'], 'read')
+        self.assertEqual(evidence['target_descriptor'], 'Lexample/Target;')
+
+        data = bytearray(make_static_field_dex())
+        instruction = data.find(b'\x60\x00\x01\x00\x0f\x00')
+        data[instruction] = 0x67
+        query = {
+            'field': {
+                'class': ['Lexample/Statics;', True],
+                'field': ['SECOND', True],
+                'descriptor': 'I',
+            }
+        }
+        rows = AscHandler().findrefs_structured('fixture.dex', bytes(data), 'field', query)
+        self.assertEqual(rows[0]['evidence'][0]['access'], 'write')
+
 
 class InsnVerifyPatternTests(unittest.TestCase):
     """INSN_VERIFY must compile on every Python the project declares support for."""
@@ -100,7 +159,7 @@ class InsnVerifyPatternTests(unittest.TestCase):
             self.skipTest('interpreter has no atomic groups; fallback is the only form')
         self.assertIsNotNone(probe)
 
-        from droidasc.asc_core.models import dvm_opcode
+        from asc_mcp.core.models import dvm_opcode
         buckets = {}
         for opcode in dvm_opcode.opcodes:
             buckets.setdefault(dvm_opcode.opcodes[opcode].oplen, set()).add(opcode)
@@ -133,7 +192,7 @@ class InsnVerifyPatternTests(unittest.TestCase):
 
 class StringTests(unittest.TestCase):
     def locate(self, data, query):
-        from droidasc.asc_core.findrefs.locator.string_locator import StringLocator
+        from asc_mcp.core.findrefs.locator.string_locator import StringLocator
         return StringLocator(DEX.parse(memoryview(data), 'fixture.dex')).locate(query)
 
     def test_last_string_is_searchable(self):
@@ -165,11 +224,11 @@ class DependencyTests(unittest.TestCase):
 import sys
 sys.path.insert(0, 'tests')
 from dex_fixture import make_dex
-from droidasc.asc_client.asc_handler import AscHandler
+from asc_mcp.analysis.asc_handler import AscHandler
 lines = AscHandler().findrefs('fixture.dex', make_dex(), 'string', {'string': 'token'})
 assert len(lines) == 2, lines
 assert 'androguard' not in sys.modules
-assert 'src.asc_core.utils.decompiler' not in sys.modules
+assert 'asc_mcp.core.utils.decompiler' not in sys.modules
 """
         result = subprocess.run([sys.executable, '-S', '-c', script], cwd=root,
                                 capture_output=True, text=True, timeout=30)

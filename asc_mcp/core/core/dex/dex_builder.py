@@ -1,13 +1,34 @@
 import struct
 import array
 import time
-from mutf8 import encode_modified_utf8
 from ...utils.leb128 import write_uleb128, write_sleb128
 from ...utils.dex_parser import rebuild_annotation_item
 from .dex_remapper import DexIndexMapper
 from .dex_constructor import DexHollower
 
 # dex builder is gen by LLM, I believe LLM can handle this well.. ;) 20260428
+
+
+def encode_modified_utf8(value: str) -> bytes:
+    encoded = bytearray()
+    utf16 = value.encode("utf-16-be", errors="surrogatepass")
+    for offset in range(0, len(utf16), 2):
+        code_unit = (utf16[offset] << 8) | utf16[offset + 1]
+        if code_unit == 0:
+            encoded.extend((0xC0, 0x80))
+        elif code_unit <= 0x7F:
+            encoded.append(code_unit)
+        elif code_unit <= 0x7FF:
+            encoded.extend((0xC0 | (code_unit >> 6), 0x80 | (code_unit & 0x3F)))
+        else:
+            encoded.extend(
+                (
+                    0xE0 | (code_unit >> 12),
+                    0x80 | ((code_unit >> 6) & 0x3F),
+                    0x80 | (code_unit & 0x3F),
+                )
+            )
+    return bytes(encoded)
 
 class DexBuilder:
     def __init__(self, im: DexIndexMapper, hlw: DexHollower, modified_bytecodes: dict, debug: bool = False):
